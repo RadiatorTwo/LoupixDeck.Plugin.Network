@@ -30,7 +30,7 @@ internal sealed class NetworkDisplayCommand(
             return ctx.Host.Tr(NetworkErrors.ToEnglishText(NetworkCallOutcome.Unavailable));
         }
 
-        return format(new NetworkDisplayContext(ctx, snapshot, Store, Settings));
+        return format(new NetworkDisplayContext(ctx, snapshot, Store, Settings, Descriptor.DisplayName));
     }
 
     protected override Task ExecuteCore(CommandContext ctx)
@@ -51,9 +51,33 @@ internal sealed record NetworkDisplayContext(
     CommandContext Ctx,
     NetworkSnapshot Snapshot,
     NetworkStateStore Store,
-    NetworkSettings Settings)
+    NetworkSettings Settings,
+    string DisplayName)
 {
     public string Tr(string english) => Ctx.Host.Tr(english);
+
+    /// <summary>
+    /// The device the button names, or null to follow the primary connection. A button picked
+    /// straight from the command list before the parameter had a default carries the command's own
+    /// name there; that is read as "not set" as well, unless a device really has that name.
+    /// </summary>
+    private string? RequestedDevice
+    {
+        get
+        {
+            string? requested = NetworkCommands.ReadParameter(Ctx, 0);
+
+            if (requested is not null &&
+                Snapshot.FindDevice(requested) is null &&
+                (string.Equals(requested, DisplayName, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(requested, Tr(DisplayName), StringComparison.OrdinalIgnoreCase)))
+            {
+                return null;
+            }
+
+            return requested;
+        }
+    }
 
     /// <summary>
     /// The device a device display shows: the button's Device parameter, then the interface from
@@ -63,7 +87,7 @@ internal sealed record NetworkDisplayContext(
     {
         get
         {
-            string? requested = NetworkCommands.ReadParameter(Ctx, 0);
+            string? requested = RequestedDevice;
 
             if (requested is null && Settings.PrimaryInterface.Length > 0)
             {
@@ -89,7 +113,7 @@ internal sealed record NetworkDisplayContext(
     {
         get
         {
-            bool explicitDevice = NetworkCommands.ReadParameter(Ctx, 0) is not null || Settings.PrimaryInterface.Length > 0;
+            bool explicitDevice = RequestedDevice is not null || Settings.PrimaryInterface.Length > 0;
 
             if (!explicitDevice && Snapshot.Primary is { } primary)
             {
@@ -303,9 +327,15 @@ internal static class NetworkDisplayCommands
             Group = NetworkCommands.Group,
             Icon = glyph,
             ButtonLayout = NetworkButtonLayouts.IconWithCaption(glyph, caption: null, tall: true),
-            Description = description + ". Leave the device empty to follow the primary connection.",
+            Description = description + ". Set the device to auto to follow the primary connection.",
             ParameterTemplate = NetworkCommands.DeviceTemplate,
-            Parameters = [new CommandParameter(NetworkCommands.DeviceParameter, typeof(string))]
+            Parameters =
+            [
+                new CommandParameter(NetworkCommands.DeviceParameter, typeof(string))
+                {
+                    DefaultValue = NetworkCommands.Auto
+                }
+            ]
         };
 
         return new NetworkDisplayCommand(descriptor, format, store, settings);

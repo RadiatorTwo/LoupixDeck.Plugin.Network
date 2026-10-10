@@ -47,15 +47,28 @@ internal static class NetworkCommands
     public const string ModeParameter = "Mode";
     public const string ModeTemplate = "({Mode})";
 
+    /// <summary>
+    /// The default of an optional parameter: the primary connection, the preferred VPN or every
+    /// VPN. It has to be a real value, because the host fills an empty first parameter with the
+    /// name the command was picked under.
+    /// </summary>
+    public const string Auto = "auto";
+
     public const string ModeToggle = "toggle";
     public const string ModeOn = "on";
     public const string ModeOff = "off";
 
-    /// <summary>Reads a positional parameter; trailing empty values are dropped by the host.</summary>
+    /// <summary>
+    /// Reads a positional parameter. Empty values (the host drops trailing ones) and
+    /// <see cref="Auto"/> both read as null, meaning "not set".
+    /// </summary>
     public static string? ReadParameter(CommandContext ctx, int index)
     {
         string? value = ctx.Parameters.Length > index ? ctx.Parameters[index]?.Trim() : null;
-        return string.IsNullOrEmpty(value) ? null : value;
+
+        return string.IsNullOrEmpty(value) || string.Equals(value, Auto, StringComparison.OrdinalIgnoreCase)
+            ? null
+            : value;
     }
 
     /// <summary>Reads the mode parameter. Anything unknown, including no value, toggles.</summary>
@@ -78,7 +91,8 @@ internal static class NetworkCommands
         string displayName,
         string description,
         string glyph,
-        bool hiddenFromMenu = true) => new()
+        bool hiddenFromMenu = true,
+        string? defaultValue = null) => new()
     {
         CommandName = commandName,
         DisplayName = displayName,
@@ -87,7 +101,7 @@ internal static class NetworkCommands
         ButtonLayout = NetworkButtonLayouts.IconWithCaption(glyph, caption: null, tall: true),
         Description = description,
         ParameterTemplate = ConnectionTemplate,
-        Parameters = [new CommandParameter(ConnectionParameter, typeof(string))],
+        Parameters = [new CommandParameter(ConnectionParameter, typeof(string)) { DefaultValue = defaultValue }],
         HiddenFromMenu = hiddenFromMenu
     };
 

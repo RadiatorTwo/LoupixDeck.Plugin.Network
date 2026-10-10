@@ -58,8 +58,8 @@ internal sealed class NetworkMenu(
 
         children.Add(Folder("VPN",
         [
-            Leaf("Connect Preferred VPN", NetworkCommands.ConnectVpn),
-            Leaf("Disconnect All VPNs", NetworkCommands.DisconnectVpn)
+            Leaf("Connect Preferred VPN", NetworkCommands.ConnectVpn, NetworkCommands.ConnectionParameter, NetworkCommands.Auto),
+            Leaf("Disconnect All VPNs", NetworkCommands.DisconnectVpn, NetworkCommands.ConnectionParameter, NetworkCommands.Auto)
         ]));
 
         MenuNode? devices = BuildDevices(snapshot);

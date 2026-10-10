@@ -275,15 +275,17 @@ internal static class NetworkActionCommands
         yield return new VpnCommand(NetworkCommands.ProfileDescriptor(
                 NetworkCommands.ConnectVpn,
                 "Connect VPN",
-                "Connect a VPN. Without a connection the preferred VPN from the settings is used.",
-                NetworkButtonLayouts.ConnectVpn),
+                "Connect a VPN. With auto the preferred VPN from the settings is used.",
+                NetworkButtonLayouts.ConnectVpn,
+                defaultValue: NetworkCommands.Auto),
             connect: true, store, settings);
 
         yield return new VpnCommand(NetworkCommands.ProfileDescriptor(
                 NetworkCommands.DisconnectVpn,
                 "Disconnect VPN",
-                "Disconnect a VPN. Without a connection every active VPN is disconnected.",
-                NetworkButtonLayouts.DisconnectVpn),
+                "Disconnect a VPN. With auto every active VPN is disconnected.",
+                NetworkButtonLayouts.DisconnectVpn,
+                defaultValue: NetworkCommands.Auto),
             connect: false, store, settings);
 
         yield return new DeviceCommand(NetworkCommands.DeviceDescriptor(
