@@ -35,6 +35,7 @@ internal sealed class NetworkManagerBackend : INetworkBackend
     private const string NoObject = "/";
 
     private const uint WifiDeviceType = 2;
+    private const uint WifiP2PDeviceType = 30;
     private const uint LoopbackDeviceType = 32;
     private const uint ActiveStateDeactivated = 4;
 
@@ -579,7 +580,8 @@ internal sealed class NetworkManagerBackend : INetworkBackend
 
             uint type = ReadUInt32(device.Value, "DeviceType");
 
-            if (type == LoopbackDeviceType)
+            // Loopback and the Wi-Fi P2P helpers that shadow every Wi-Fi card are nothing to switch.
+            if (type is LoopbackDeviceType or WifiP2PDeviceType)
             {
                 continue;
             }
