@@ -111,9 +111,18 @@ internal static class NetworkDisplayCommands
     /// <summary>The states of the VPN Connected button. Persisted in the button config, never rename.</summary>
     public static readonly IReadOnlyList<ButtonStateDescriptor> VpnStates =
     [
-        new ButtonStateDescriptor { Name = "No", Description = "No VPN is connected" },
-        new ButtonStateDescriptor { Name = "Yes", Description = "At least one VPN is connected" },
-        new ButtonStateDescriptor { Name = "Unavailable", Description = "NetworkManager is not available" }
+        new ButtonStateDescriptor
+        {
+            Name = "No",
+            Description = "No VPN is connected",
+            Layout = NetworkButtonLayouts.IconWithCaption(NetworkButtonLayouts.DisconnectVpn, caption: null, tall: true, NetworkButtonLayouts.OffColor)
+        },
+        new ButtonStateDescriptor
+        {
+            Name = "Yes",
+            Description = "At least one VPN is connected",
+            Layout = NetworkButtonLayouts.IconWithCaption(NetworkButtonLayouts.ConnectVpn, caption: null, tall: true, NetworkButtonLayouts.OnColor)
+        }
     ];
 
     public const string Status = NetworkCommands.Prefix + "Status";
@@ -268,7 +277,8 @@ internal static class NetworkDisplayCommands
             DisplayName = displayName,
             Group = NetworkCommands.Group,
             Icon = glyph,
-            ButtonLayout = NetworkButtonLayouts.IconWithCaption(glyph, caption: null, tall: true),
+            // A command whose states bring their own layers must not stack the standard look on top.
+            ButtonLayout = states is null ? NetworkButtonLayouts.IconWithCaption(glyph, caption: null, tall: true) : NetworkButtonLayouts.None,
             Description = description,
             States = states ?? []
         };

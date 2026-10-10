@@ -209,14 +209,28 @@ internal sealed class FavoriteCommand(
 internal static class NetworkActionCommands
 {
     /// <summary>
-    /// The states the Wi-Fi and networking buttons carry. Index 0 is the resting state. These names
-    /// are persisted in the button config and must never change.
+    /// The states the Wi-Fi and networking buttons carry, each with its own icon and caption.
+    /// Index 0 is the resting state. The names are persisted in the button config and must never
+    /// change.
     /// </summary>
-    public static readonly IReadOnlyList<ButtonStateDescriptor> SwitchStates =
+    private static IReadOnlyList<ButtonStateDescriptor> SwitchStates(
+        string offGlyph,
+        string offCaption,
+        string onGlyph,
+        string onCaption) =>
     [
-        new ButtonStateDescriptor { Name = "Off", Description = "Switched off" },
-        new ButtonStateDescriptor { Name = "On", Description = "Switched on" },
-        new ButtonStateDescriptor { Name = "Unavailable", Description = "NetworkManager or the hardware is not available" }
+        new ButtonStateDescriptor
+        {
+            Name = "Off",
+            Description = "Switched off",
+            Layout = NetworkButtonLayouts.IconWithCaption(offGlyph, offCaption, color: NetworkButtonLayouts.OffColor)
+        },
+        new ButtonStateDescriptor
+        {
+            Name = "On",
+            Description = "Switched on",
+            Layout = NetworkButtonLayouts.IconWithCaption(onGlyph, onCaption)
+        }
     ];
 
     public static IEnumerable<IPluginCommand> Create(NetworkStateStore store, NetworkSettings settings)
@@ -225,14 +239,16 @@ internal static class NetworkActionCommands
                 NetworkCommands.Wifi,
                 "Wi-Fi",
                 "Switch Wi-Fi on, off or toggle it. The button follows the Wi-Fi state.",
-                NetworkButtonLayouts.Wifi),
+                NetworkButtonLayouts.Wifi,
+                SwitchStates(NetworkButtonLayouts.WifiOff, "Wi-Fi Off", NetworkButtonLayouts.Wifi, "Wi-Fi On")),
             wifi: true, store, settings);
 
         yield return new RadioCommand(SwitchDescriptor(
                 NetworkCommands.Networking,
                 "Networking",
                 "Switch networking as a whole on, off or toggle it. The button follows the networking state.",
-                NetworkButtonLayouts.Networking),
+                NetworkButtonLayouts.Networking,
+                SwitchStates(NetworkButtonLayouts.Unavailable, "Networking Off", NetworkButtonLayouts.Networking, "Networking On")),
             wifi: false, store, settings);
 
         yield return new ProfileActionCommand(NetworkCommands.ProfileDescriptor(
@@ -299,25 +315,30 @@ internal static class NetworkActionCommands
             add: false, store, settings);
     }
 
-    /// <summary>The state a switch button shows for the current snapshot.</summary>
+    /// <summary>
+    /// The state a switch button shows. Without NetworkManager, or with the hardware switch off,
+    /// the radio is off as far as the user is concerned.
+    /// </summary>
     public static string SwitchStateFor(NetworkSnapshot snapshot, bool wifi)
     {
-        if (!snapshot.IsAvailable || (wifi && !snapshot.WifiHardwareEnabled))
-        {
-            return "Unavailable";
-        }
-
-        bool on = wifi ? snapshot.WifiEnabled : snapshot.NetworkingEnabled;
+        bool on = snapshot.IsAvailable &&
+                  (wifi ? snapshot.WifiEnabled && snapshot.WifiHardwareEnabled : snapshot.NetworkingEnabled);
         return on ? "On" : "Off";
     }
 
-    private static CommandDescriptor SwitchDescriptor(string commandName, string displayName, string description, string glyph) => new()
+    private static CommandDescriptor SwitchDescriptor(
+        string commandName,
+        string displayName,
+        string description,
+        string glyph,
+        IReadOnlyList<ButtonStateDescriptor> states) => new()
     {
         CommandName = commandName,
         DisplayName = displayName,
         Group = NetworkCommands.Group,
         Icon = glyph,
-        ButtonLayout = NetworkButtonLayouts.IconWithCaption(glyph, caption: null),
+        // Every state brings its own icon and caption.
+        ButtonLayout = NetworkButtonLayouts.None,
         Description = description,
         ParameterTemplate = NetworkCommands.ModeTemplate,
         Parameters =
@@ -328,6 +349,6 @@ internal static class NetworkActionCommands
             }
         ],
         HiddenFromMenu = true,
-        States = SwitchStates
+        States = states
     };
 }

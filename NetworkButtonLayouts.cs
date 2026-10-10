@@ -37,6 +37,20 @@ internal static class NetworkButtonLayouts
     public const string Dns = "\U000F01D6";               // mdi-dns
     public const string ConnectionType = "\U000F027A";    // mdi-format-list-bulleted-type
     public const string ProfileActive = "\U000F0565";     // mdi-shield-check
+    public const string WifiOff = "\U000F05AA";           // mdi-wifi-off
+    public const string Connecting = "\U000F031A";        // mdi-lan-pending
+    public const string Failed = "\U000F0C5F";            // mdi-close-network-outline
+    public const string Unavailable = "\U000F0C9B";       // mdi-network-off
+
+    // State tints: the icon says at a glance which state a key is in.
+    public const string OnColor = "#4CAF50";
+    public const string OffColor = "#8A8A8A";
+    public const string BusyColor = "#FFB300";
+    public const string FailedColor = "#E53935";
+    public const string UnavailableColor = "#5A5A5A";
+
+    /// <summary>The command layout of a key whose every state brings its own layers.</summary>
+    public static ButtonLayoutDescriptor None { get; } = new() { Mode = ButtonLayoutMode.None };
 
     // Pixel values for a 90 px key; the host scales them onto the key actually being written.
     private const double IconScale = 0.5;

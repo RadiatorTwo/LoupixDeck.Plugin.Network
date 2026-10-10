@@ -65,12 +65,23 @@ internal static class ConnectionSlotCommands
     /// </summary>
     public static readonly IReadOnlyList<ButtonStateDescriptor> States =
     [
-        new ButtonStateDescriptor { Name = "Disconnected", Description = "The connection is down" },
-        new ButtonStateDescriptor { Name = "Connecting", Description = "The connection is coming up" },
-        new ButtonStateDescriptor { Name = "Connected", Description = "The connection is up" },
-        new ButtonStateDescriptor { Name = "Failed", Description = "The last activation failed" },
-        new ButtonStateDescriptor { Name = "Unavailable", Description = "NetworkManager, the profile or its device is not available" }
+        State("Disconnected", "The connection is down", NetworkButtonLayouts.Deactivate, NetworkButtonLayouts.OffColor),
+        State("Connecting", "The connection is coming up", NetworkButtonLayouts.Connecting, NetworkButtonLayouts.BusyColor),
+        State("Connected", "The connection is up", NetworkButtonLayouts.Activate, NetworkButtonLayouts.OnColor),
+        State("Failed", "The last activation failed", NetworkButtonLayouts.Failed, NetworkButtonLayouts.FailedColor),
+        State("Unavailable", "NetworkManager, the profile or its device is not available", NetworkButtonLayouts.Unavailable, NetworkButtonLayouts.UnavailableColor)
     ];
+
+    /// <summary>
+    /// A state with its own icon. The caption is left to the host and then replaced by the slot's
+    /// live text, which names the profile and its state.
+    /// </summary>
+    private static ButtonStateDescriptor State(string name, string description, string glyph, string color) => new()
+    {
+        Name = name,
+        Description = description,
+        Layout = NetworkButtonLayouts.IconWithCaption(glyph, caption: null, tall: true, color)
+    };
 
     public static IReadOnlyList<ConnectionSlotCommand> Create(NetworkStateStore store, NetworkSettings settings)
     {
@@ -86,8 +97,8 @@ internal static class ConnectionSlotCommands
                 DisplayName = "Connection Slot " + number,
                 Group = NetworkCommands.Group,
                 Icon = NetworkButtonLayouts.Slot,
-                // The caption is a placeholder: the slot replaces it with the profile and its state.
-                ButtonLayout = NetworkButtonLayouts.IconWithCaption(NetworkButtonLayouts.Slot, caption: null, tall: true),
+                // Every state brings its own icon; the slot's live text replaces the caption.
+                ButtonLayout = NetworkButtonLayouts.None,
                 Description = "Show and toggle favorite connection " + number + ". The button follows the connection's state.",
                 HiddenFromMenu = true,
                 States = States

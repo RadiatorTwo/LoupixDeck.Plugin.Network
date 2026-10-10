@@ -70,12 +70,7 @@ internal sealed class NetworkStateBinder(
 
     private static string VpnStateFor(NetworkSnapshot snapshot)
     {
-        if (!snapshot.IsAvailable)
-        {
-            return "Unavailable";
-        }
-
-        return snapshot.ActiveConnections.Any(active => active.IsVpn && active.State == ConnectionState.Connected) ? "Yes" : "No";
+        return snapshot.IsAvailable && snapshot.ActiveConnections.Any(active => active.IsVpn && active.State == ConnectionState.Connected) ? "Yes" : "No";
     }
 
     private void SetState(string commandName, string stateName)
