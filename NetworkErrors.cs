@@ -13,6 +13,9 @@ public enum NetworkCallOutcome
     /// <summary>The backend does not know this connection or device.</summary>
     NotFound,
 
+    /// <summary>The profile exists, but no device it could run on is usable (no cable, radio off).</summary>
+    NoDevice,
+
     /// <summary>The bus or NetworkManager is not reachable right now.</summary>
     Unavailable,
 
@@ -72,7 +75,8 @@ internal static class NetworkErrors
             ConnectionNotActive or DeviceNotActive => NetworkCallOutcome.Ok,
             AccessDenied or InteractiveAuthorizationRequired or PolicyKitNotAuthorized
                 or ManagerPermissionDenied or SettingsPermissionDenied => NetworkCallOutcome.PermissionDenied,
-            UnknownConnection or UnknownDevice or UnknownObject or UnknownMethod => NetworkCallOutcome.NotFound,
+            UnknownConnection or UnknownObject or UnknownMethod => NetworkCallOutcome.NotFound,
+            UnknownDevice => NetworkCallOutcome.NoDevice,
             ServiceUnknown or NameHasNoOwner or NoReply or Disconnected => NetworkCallOutcome.Unavailable,
             _ => NetworkCallOutcome.Failed
         };
@@ -86,6 +90,7 @@ internal static class NetworkErrors
             NetworkCallOutcome.Ok => "Done",
             NetworkCallOutcome.PermissionDenied => "Not allowed",
             NetworkCallOutcome.NotFound => "Connection not found",
+            NetworkCallOutcome.NoDevice => "No usable device",
             NetworkCallOutcome.Unavailable => "NetworkManager unavailable",
             NetworkCallOutcome.Timeout => "Timed out",
             _ => "Failed"
