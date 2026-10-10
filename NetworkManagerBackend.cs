@@ -46,6 +46,7 @@ internal sealed class NetworkManagerBackend : INetworkBackend
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
     private readonly Timer _debounce;
     private readonly List<IDisposable> _watches = [];
+    private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>Active connection paths returned by ActivateConnection that no snapshot has seen yet.</summary>
     private readonly ConcurrentDictionary<string, string> _pendingActivations = new(StringComparer.Ordinal);
@@ -68,6 +69,8 @@ internal sealed class NetworkManagerBackend : INetworkBackend
     }
 
     public NetworkSnapshot Current => _current;
+
+    public Task Ready => _ready.Task;
 
     public int CallTimeoutMilliseconds
     {
@@ -507,6 +510,7 @@ internal sealed class NetworkManagerBackend : INetworkBackend
     {
         _index = index;
         _current = snapshot;
+        _ready.TrySetResult();
 
         if (snapshot.IsAvailable != _wasAvailable)
         {

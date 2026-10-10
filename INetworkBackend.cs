@@ -14,6 +14,9 @@ internal interface INetworkBackend : IDisposable
     /// <summary>The latest snapshot. Never null; <see cref="NetworkSnapshot.Unavailable"/> while not connected.</summary>
     NetworkSnapshot Current { get; }
 
+    /// <summary>Completes once the first snapshot — available or not — has been published.</summary>
+    Task Ready { get; }
+
     /// <summary>Per-call timeout for the backend's own calls.</summary>
     int CallTimeoutMilliseconds { get; set; }
 
@@ -43,6 +46,8 @@ internal interface INetworkBackend : IDisposable
 internal sealed class UnsupportedNetworkBackend : INetworkBackend
 {
     public NetworkSnapshot Current => NetworkSnapshot.Unavailable;
+
+    public Task Ready => Task.CompletedTask;
 
     public int CallTimeoutMilliseconds { get; set; }
 

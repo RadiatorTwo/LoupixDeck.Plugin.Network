@@ -8,6 +8,9 @@ namespace LoupixDeck.Plugin.Network;
 /// </summary>
 public sealed class NetworkPlugin : LoupixPlugin, IMenuContributor, IPluginSettingsPage, IPluginRequirements
 {
+    /// <summary>How long the menu and the requirements wait for the first NetworkManager snapshot.</summary>
+    private static readonly TimeSpan FirstSnapshotWait = TimeSpan.FromSeconds(3);
+
     private readonly List<IPluginCommand> _commands = [];
 
     private IPluginHost? _host;
@@ -91,8 +94,16 @@ public sealed class NetworkPlugin : LoupixPlugin, IMenuContributor, IPluginSetti
         }
     ];
 
-    public Task<IReadOnlyList<MenuNode>> GetMenuNodes(ButtonTargets target) =>
-        Task.FromResult(_menu?.Build() ?? []);
+    public async Task<IReadOnlyList<MenuNode>> GetMenuNodes(ButtonTargets target)
+    {
+        // The menu may be opened before the first snapshot arrived; the host allows a few seconds.
+        if (_backend is { } backend)
+        {
+            await Task.WhenAny(backend.Ready, Task.Delay(FirstSnapshotWait)).ConfigureAwait(false);
+        }
+
+        return _menu?.Build() ?? [];
+    }
 
     public IReadOnlyList<PluginSettingDescriptor> SettingsSchema =>
         _settingsPage?.BuildSchema() ?? [];
@@ -132,6 +143,10 @@ public sealed class NetworkPlugin : LoupixPlugin, IMenuContributor, IPluginSetti
                 }
             ];
         }
+
+        // The host asks right after loading, off the startup path; without this wait the first
+        // answer would report NetworkManager as missing only because the bus was not read yet.
+        _backend?.Ready.Wait(FirstSnapshotWait);
 
         bool available = _store?.Current.IsAvailable == true;
 
