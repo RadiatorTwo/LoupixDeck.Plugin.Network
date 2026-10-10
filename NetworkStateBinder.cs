@@ -39,10 +39,12 @@ internal sealed class NetworkStateBinder(
 
         foreach (ConnectionSlotCommand slot in slots)
         {
-            if (slot.ProfileId is { } profileId)
-            {
-                SetState(slot.Descriptor.CommandName, ConnectionStates.ToButtonState(store.StateOf(profileId, snapshot)));
-            }
+            // An empty slot reads as unavailable rather than keeping the state of its old favorite.
+            ConnectionState state = slot.ProfileId is { } profileId
+                ? store.StateOf(profileId, snapshot)
+                : ConnectionState.Unavailable;
+
+            SetState(slot.Descriptor.CommandName, ConnectionStates.ToButtonState(state));
         }
 
         SetState(NetworkCommands.Wifi, NetworkActionCommands.SwitchStateFor(snapshot, wifi: true));

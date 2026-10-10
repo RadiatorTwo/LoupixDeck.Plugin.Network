@@ -37,7 +37,9 @@ internal sealed class NetworkManagerBackend : INetworkBackend
     private const uint WifiDeviceType = 2;
     private const uint WifiP2PDeviceType = 30;
     private const uint LoopbackDeviceType = 32;
+    private const uint ActiveStateActivated = 2;
     private const uint ActiveStateDeactivated = 4;
+    private const uint ReasonUserDisconnected = 2;
 
     private static readonly TimeSpan Debounce = TimeSpan.FromMilliseconds(150);
 
@@ -48,8 +50,29 @@ internal sealed class NetworkManagerBackend : INetworkBackend
     private readonly List<IDisposable> _watches = [];
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    /// <summary>
+    /// Guards <see cref="_pendingActivations"/> and <see cref="_orphanFailures"/>: an activation's
+    /// reply and its failure signal arrive on different threads, in either order.
+    /// </summary>
+    private readonly Lock _activationLock = new();
+
     /// <summary>Active connection paths returned by ActivateConnection that no snapshot has seen yet.</summary>
-    private readonly ConcurrentDictionary<string, string> _pendingActivations = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (string ProfileId, DateTimeOffset Since)> _pendingActivations = new(StringComparer.Ordinal);
+
+    /// <summary>Failures of active connections whose profile was not known yet when the signal came.</summary>
+    private readonly Dictionary<string, (string Reason, DateTimeOffset Since)> _orphanFailures = new(StringComparer.Ordinal);
+
+    /// <summary>Active connection paths that reached the activated state at least once.</summary>
+    private readonly ConcurrentDictionary<string, byte> _reachedActivated = new(StringComparer.Ordinal);
+
+    /// <summary>Active connection paths the plugin itself asked to take down.</summary>
+    private readonly ConcurrentDictionary<string, byte> _deactivationRequested = new(StringComparer.Ordinal);
+
+    /// <summary>Serializes publishing, so a refresh that read the old NetworkManager cannot overwrite its loss.</summary>
+    private readonly Lock _publishLock = new();
+
+    /// <summary>How long an unconfirmed activation or failure is remembered before it is dropped.</summary>
+    private static readonly TimeSpan PendingLifetime = TimeSpan.FromMinutes(2);
 
     /// <summary>The profiles by settings path. Only touched while <see cref="_refreshLock"/> is held.</summary>
     private Dictionary<string, NetworkProfile> _profilesByPath = new(StringComparer.Ordinal);
@@ -57,6 +80,7 @@ internal sealed class NetworkManagerBackend : INetworkBackend
     private volatile NetworkSnapshot _current = NetworkSnapshot.Unavailable;
     private volatile ObjectIndex _index = ObjectIndex.Empty;
     private int _profilesDirty = 1;
+    private int _generation;
     private int _timeoutMilliseconds = 2000;
     private bool _wasAvailable;
     private volatile bool _disposed;
@@ -89,7 +113,7 @@ internal sealed class NetworkManagerBackend : INetworkBackend
 
         if (!await _connection.ConnectAsync().ConfigureAwait(false))
         {
-            Publish(NetworkSnapshot.Unavailable, ObjectIndex.Empty);
+            Publish(NetworkSnapshot.Unavailable, ObjectIndex.Empty, Volatile.Read(ref _generation));
         }
     }
 
@@ -99,7 +123,21 @@ internal sealed class NetworkManagerBackend : INetworkBackend
         _connection.ConnectionReady -= OnConnectionReady;
         _connection.ConnectionLost -= OnConnectionLost;
         _debounce.Dispose();
-        DisposeWatches();
+
+        // A subscription started by a reconnect may still be adding watches.
+        bool locked = _refreshLock.Wait(TimeSpan.FromSeconds(2));
+        try
+        {
+            DisposeWatches();
+        }
+        finally
+        {
+            if (locked)
+            {
+                _refreshLock.Release();
+            }
+        }
+
         _connection.Dispose();
     }
 
@@ -134,7 +172,25 @@ internal sealed class NetworkManagerBackend : INetworkBackend
 
         if (result.IsSuccess && result.Value.Length > 0)
         {
-            _pendingActivations[result.Value] = profileId;
+            string? failure = null;
+
+            lock (_activationLock)
+            {
+                // A fast failure can be signalled before this reply is handled.
+                if (_orphanFailures.Remove(result.Value, out (string Reason, DateTimeOffset Since) orphan))
+                {
+                    failure = orphan.Reason;
+                }
+                else
+                {
+                    _pendingActivations[result.Value] = (profileId, DateTimeOffset.UtcNow);
+                }
+            }
+
+            if (failure is not null)
+            {
+                ReportFailure(profileId, failure);
+            }
         }
 
         ScheduleRefresh(profiles: false);
@@ -160,6 +216,9 @@ internal sealed class NetworkManagerBackend : INetworkBackend
 
         foreach (string activePath in activePaths)
         {
+            // Taking it down on purpose must not read as a failed activation.
+            _deactivationRequested[activePath] = 0;
+
             NetworkCallOutcome single = await client.CallAsync(
                 Service,
                 ManagerPath,
@@ -304,8 +363,17 @@ internal sealed class NetworkManagerBackend : INetworkBackend
 
     private void OnConnectionLost()
     {
-        _pendingActivations.Clear();
-        Publish(NetworkSnapshot.Unavailable, ObjectIndex.Empty);
+        lock (_activationLock)
+        {
+            _pendingActivations.Clear();
+            _orphanFailures.Clear();
+        }
+
+        _reachedActivated.Clear();
+        _deactivationRequested.Clear();
+
+        // A refresh still reading the old NetworkManager must not publish over this.
+        Publish(NetworkSnapshot.Unavailable, ObjectIndex.Empty, Interlocked.Increment(ref _generation));
     }
 
     private void ScheduleRefresh(bool profiles)
@@ -342,6 +410,11 @@ internal sealed class NetworkManagerBackend : INetworkBackend
         await _refreshLock.WaitAsync().ConfigureAwait(false);
         try
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             DisposeWatches();
 
             // One rule for every NetworkManager object: devices, active connections, addresses and
@@ -433,23 +506,65 @@ internal sealed class NetworkManagerBackend : INetworkBackend
 
     private void OnActiveStateChanged((string Path, uint State, uint Reason) change)
     {
-        if (change.State == ActiveStateDeactivated)
+        if (change.State == ActiveStateActivated)
         {
+            _reachedActivated[change.Path] = 0;
+        }
+        else if (change.State == ActiveStateDeactivated)
+        {
+            bool requested = _deactivationRequested.TryRemove(change.Path, out _);
+            bool wasActivated = _reachedActivated.TryRemove(change.Path, out _);
+            string? reason = FailureReason(change.Reason, wasActivated, requested);
             string? profileId = _index.ActiveProfiles.GetValueOrDefault(change.Path);
 
-            if (_pendingActivations.TryRemove(change.Path, out string? pending))
+            lock (_activationLock)
             {
-                profileId ??= pending;
+                if (_pendingActivations.Remove(change.Path, out (string ProfileId, DateTimeOffset Since) pending))
+                {
+                    profileId ??= pending.ProfileId;
+                }
+
+                if (profileId is null && reason is not null)
+                {
+                    // The ActivateConnection reply for this path has not been handled yet.
+                    _orphanFailures[change.Path] = (reason, DateTimeOffset.UtcNow);
+                }
             }
 
-            if (profileId is not null && ActivationFailureReasons.TryGetValue(change.Reason, out string? reason))
+            if (profileId is not null && reason is not null)
             {
-                _logger.Info($"Network: activation of {profileId} failed: {reason}.");
-                RaiseActivationFailed(profileId, reason);
+                ReportFailure(profileId, reason);
             }
         }
 
         ScheduleRefresh(profiles: false);
+    }
+
+    /// <summary>
+    /// Why a connection that went down failed, or null when it simply ended. NetworkManager only
+    /// gives VPN plugins a specific reason; a device-bound connection that fails (wrong password, no
+    /// DHCP lease) reports a plain device disconnect, so "never came up and nobody asked it to stop"
+    /// is what marks those as failed.
+    /// </summary>
+    private static string? FailureReason(uint reason, bool wasActivated, bool requested)
+    {
+        if (requested)
+        {
+            return null;
+        }
+
+        if (ActivationFailureReasons.TryGetValue(reason, out string? text))
+        {
+            return text;
+        }
+
+        return !wasActivated && reason != ReasonUserDisconnected ? "Activation failed" : null;
+    }
+
+    private void ReportFailure(string profileId, string reason)
+    {
+        _logger.Info($"Network: activation of {profileId} failed: {reason}.");
+        RaiseActivationFailed(profileId, reason);
     }
 
     /// <summary>NMActiveConnectionStateReason values that mean the activation failed rather than was ended.</summary>
@@ -475,11 +590,12 @@ internal sealed class NetworkManagerBackend : INetworkBackend
         await _refreshLock.WaitAsync().ConfigureAwait(false);
         try
         {
+            int generation = Volatile.Read(ref _generation);
             DBusClient? client = GetClient();
 
             if (client is null)
             {
-                Publish(NetworkSnapshot.Unavailable, ObjectIndex.Empty);
+                Publish(NetworkSnapshot.Unavailable, ObjectIndex.Empty, generation);
                 return;
             }
 
@@ -490,14 +606,16 @@ internal sealed class NetworkManagerBackend : INetworkBackend
             {
                 // NetworkManager is not on the bus (yet). The profiles are read again once it is.
                 Interlocked.Exchange(ref _profilesDirty, 1);
-                Publish(NetworkSnapshot.Unavailable, ObjectIndex.Empty);
+                Publish(NetworkSnapshot.Unavailable, ObjectIndex.Empty, generation);
                 return;
             }
 
-            Publish(built.Value.Snapshot, built.Value.Index);
+            Publish(built.Value.Snapshot, built.Value.Index, generation);
         }
         catch (Exception ex)
         {
+            // The profiles may not have been read; the next refresh has to read them again.
+            Interlocked.Exchange(ref _profilesDirty, 1);
             _logger.Warn($"Network: reading the NetworkManager state failed: {ex.Message}");
         }
         finally
@@ -506,19 +624,29 @@ internal sealed class NetworkManagerBackend : INetworkBackend
         }
     }
 
-    private void Publish(NetworkSnapshot snapshot, ObjectIndex index)
+    private void Publish(NetworkSnapshot snapshot, ObjectIndex index, int generation)
     {
-        _index = index;
-        _current = snapshot;
-        _ready.TrySetResult();
-
-        if (snapshot.IsAvailable != _wasAvailable)
+        lock (_publishLock)
         {
-            _wasAvailable = snapshot.IsAvailable;
-            _logger.Info(snapshot.IsAvailable
-                ? $"Network: connected to NetworkManager ({snapshot.Profiles.Count} profiles, {snapshot.Devices.Count} devices)."
-                : "Network: NetworkManager is unavailable.");
+            if (generation != Volatile.Read(ref _generation))
+            {
+                // Read from a NetworkManager that has gone away since.
+                return;
+            }
+
+            _index = index;
+            _current = snapshot;
+
+            if (snapshot.IsAvailable != _wasAvailable)
+            {
+                _wasAvailable = snapshot.IsAvailable;
+                _logger.Info(snapshot.IsAvailable
+                    ? $"Network: connected to NetworkManager ({snapshot.Profiles.Count} profiles, {snapshot.Devices.Count} devices)."
+                    : "Network: NetworkManager is unavailable.");
+            }
         }
+
+        _ready.TrySetResult();
 
         try
         {
@@ -618,7 +746,6 @@ internal sealed class NetworkManagerBackend : INetworkBackend
             }
 
             profileByActivePath[activePath] = profileId;
-            _pendingActivations.TryRemove(activePath, out _);
 
             if (!activePathsByProfile.TryGetValue(profileId, out List<string>? paths))
             {
@@ -643,16 +770,25 @@ internal sealed class NetworkManagerBackend : INetworkBackend
                 ReadPath(properties, "Ip6Config"),
                 addressCache).ConfigureAwait(false);
 
+            ConnectionState activeState = ConnectionStates.FromActiveConnectionState(ReadUInt32(properties, "State"));
+
+            if (activeState == ConnectionState.Connected)
+            {
+                _reachedActivated[activePath] = 0;
+            }
+
             actives.Add(new ActiveNetworkConnection(
                 profileId,
                 ReadString(properties, "Id"),
                 type,
                 ConnectionStates.KindFromType(type),
-                ConnectionStates.FromActiveConnectionState(ReadUInt32(properties, "State")),
+                activeState,
                 interfaces,
                 ReadBool(properties, "Default") || ReadBool(properties, "Default6"),
                 addresses));
         }
+
+        PruneActivations();
 
         List<NetworkDevice> devices = [];
         Dictionary<string, string> devicePathByInterface = new(StringComparer.Ordinal);
@@ -709,6 +845,34 @@ internal sealed class NetworkManagerBackend : INetworkBackend
             accessPoints);
 
         return (snapshot, index);
+    }
+
+    /// <summary>
+    /// Forgets activations and failures nobody claimed for too long. A pending activation stays even
+    /// once a snapshot has it: its failure signal may arrive before that snapshot is published.
+    /// </summary>
+    private void PruneActivations()
+    {
+        DateTimeOffset cutoff = DateTimeOffset.UtcNow - PendingLifetime;
+
+        lock (_activationLock)
+        {
+            foreach (string path in _pendingActivations.Keys.ToList())
+            {
+                if (_pendingActivations[path].Since < cutoff)
+                {
+                    _pendingActivations.Remove(path);
+                }
+            }
+
+            foreach (string path in _orphanFailures.Keys.ToList())
+            {
+                if (_orphanFailures[path].Since < cutoff)
+                {
+                    _orphanFailures.Remove(path);
+                }
+            }
+        }
     }
 
     /// <summary>

@@ -176,6 +176,7 @@ internal sealed class NetworkSettingsPage(
     private Task<string> ClearFavoritesAsync()
     {
         settings.ClearFavorites();
+        store.NotifySettingsChanged();
         return Task.FromResult(host.Tr("Favorite connections cleared"));
     }
 }

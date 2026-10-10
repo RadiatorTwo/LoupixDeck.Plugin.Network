@@ -189,9 +189,16 @@ internal sealed class FavoriteCommand(
             return Task.CompletedTask;
         }
 
+        bool changed = add ? Settings.AddFavorite(profileId) : Settings.RemoveFavorite(profileId);
         string message = add
-            ? Settings.AddFavorite(profileId) ? "Added to favorites" : "Already a favorite"
-            : Settings.RemoveFavorite(profileId) ? "Removed from favorites" : "Not a favorite";
+            ? changed ? "Added to favorites" : "Already a favorite"
+            : changed ? "Removed from favorites" : "Not a favorite";
+
+        if (changed)
+        {
+            // The slots behind the favorites may now show other profiles.
+            Store.NotifySettingsChanged();
+        }
 
         ShowOverlay(ctx, ctx.Host.Tr(message));
         return Task.CompletedTask;

@@ -30,6 +30,9 @@ internal sealed class NetworkStateStore : IDisposable
     private readonly IPluginLogger _logger;
     private readonly ConcurrentDictionary<string, Failure> _failures = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>The wait of the latest action per profile; a newer action cancels the older wait.</summary>
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _actions = new(StringComparer.OrdinalIgnoreCase);
+
     public NetworkStateStore(INetworkBackend backend, NetworkSettings settings, IPluginLogger logger)
     {
         _backend = backend;
@@ -81,6 +84,13 @@ internal sealed class NetworkStateStore : IDisposable
             return active.State;
         }
 
+        // Nothing comes up while networking is off, and no Wi-Fi profile while the radio is off.
+        if (!snapshot.NetworkingEnabled ||
+            (profile.Kind == NetworkConnectionKind.Wifi && (!snapshot.WifiEnabled || !snapshot.WifiHardwareEnabled)))
+        {
+            return ConnectionState.Unavailable;
+        }
+
         // A profile bound to an interface that cannot be used (no cable, radio off) cannot come up.
         if (profile.InterfaceName.Length > 0 &&
             snapshot.FindDevice(profile.InterfaceName) is { State: ConnectionState.Unavailable })
@@ -95,10 +105,19 @@ internal sealed class NetworkStateStore : IDisposable
     public string? FailureOf(string profileId) =>
         _failures.TryGetValue(profileId, out Failure failure) && !failure.IsExpired ? failure.Reason : null;
 
+    /// <summary>
+    /// Raises <see cref="Changed"/> after something outside the snapshot changed what the buttons
+    /// show, such as the favorites list behind the slots.
+    /// </summary>
+    public void NotifySettingsChanged() => RaiseChanged();
+
     /// <summary>Brings a profile up and waits until it is connected, failed or the timeout ran out.</summary>
     public async Task<NetworkActionResult> ActivateAsync(string profileId)
     {
-        ClearFailure(profileId);
+        CancellationToken superseded = BeginAction(profileId);
+
+        // A reactivation starts from Connected, so the current state must not count as done.
+        bool wasConnected = StateOf(profileId) == ConnectionState.Connected;
 
         NetworkCallOutcome outcome = await _backend.ActivateAsync(profileId).ConfigureAwait(false);
 
@@ -109,9 +128,11 @@ internal sealed class NetworkStateStore : IDisposable
 
         NetworkActionResult result = await WaitForAsync(
             profileId,
-            state => state == ConnectionState.Connected).ConfigureAwait(false);
+            state => state == ConnectionState.Connected,
+            checkNow: !wasConnected,
+            superseded).ConfigureAwait(false);
 
-        if (result.Outcome == NetworkCallOutcome.Timeout)
+        if (result.Outcome == NetworkCallOutcome.Timeout && StateOf(profileId) == ConnectionState.Connecting)
         {
             RememberFailure(profileId, "Timed out");
         }
@@ -122,7 +143,7 @@ internal sealed class NetworkStateStore : IDisposable
     /// <summary>Takes a profile down and waits until it is down or the timeout ran out.</summary>
     public async Task<NetworkActionResult> DeactivateAsync(string profileId)
     {
-        ClearFailure(profileId);
+        CancellationToken superseded = BeginAction(profileId);
 
         NetworkCallOutcome outcome = await _backend.DeactivateAsync(profileId).ConfigureAwait(false);
 
@@ -133,14 +154,46 @@ internal sealed class NetworkStateStore : IDisposable
 
         return await WaitForAsync(
             profileId,
-            state => state is ConnectionState.Disconnected or ConnectionState.Unavailable).ConfigureAwait(false);
+            state => state is ConnectionState.Disconnected or ConnectionState.Unavailable,
+            checkNow: true,
+            superseded).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Starts an action on a profile: forgets its old failure and ends the wait of any earlier
+    /// action, so cancelling a connection that hangs does not later report the first press as
+    /// timed out.
+    /// </summary>
+    private CancellationToken BeginAction(string profileId)
+    {
+        ClearFailure(profileId);
+
+        CancellationTokenSource current = new();
+        CancellationTokenSource? previous = null;
+
+        _actions.AddOrUpdate(
+            profileId,
+            current,
+            (_, old) =>
+            {
+                previous = old;
+                return current;
+            });
+
+        previous?.Cancel();
+        return current.Token;
     }
 
     /// <summary>
     /// Waits for a profile to reach a state. A failure reported by the backend ends the wait early,
-    /// because NetworkManager drops a failed activation instead of keeping it in a failed state.
+    /// because NetworkManager drops a failed activation instead of keeping it in a failed state. A
+    /// newer action on the same profile ends it quietly.
     /// </summary>
-    private async Task<NetworkActionResult> WaitForAsync(string profileId, Func<ConnectionState, bool> reached)
+    private async Task<NetworkActionResult> WaitForAsync(
+        string profileId,
+        Func<ConnectionState, bool> reached,
+        bool checkNow,
+        CancellationToken superseded)
     {
         TaskCompletionSource<NetworkActionResult> done = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -161,7 +214,13 @@ internal sealed class NetworkStateStore : IDisposable
         Changed += Check;
         try
         {
-            Check();
+            if (checkNow)
+            {
+                Check();
+            }
+
+            using CancellationTokenRegistration registration =
+                superseded.Register(() => done.TrySetResult(new NetworkActionResult(NetworkCallOutcome.Ok)));
 
             Task finished = await Task.WhenAny(done.Task, Task.Delay(_settings.ActionTimeout)).ConfigureAwait(false);
             return finished == done.Task ? done.Task.Result : new NetworkActionResult(NetworkCallOutcome.Timeout);

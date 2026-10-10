@@ -57,10 +57,18 @@ internal sealed class NetworkManagerConnection(IPluginLogger logger) : IDisposab
             return false;
         }
 
+        DBusConnection connection = new(address);
+
         try
         {
-            DBusConnection connection = new(address);
             await connection.ConnectAsync().ConfigureAwait(false);
+
+            if (_shutdown.IsCancellationRequested)
+            {
+                // The plugin was shut down while this (re)connect was under way.
+                connection.Dispose();
+                return false;
+            }
 
             _connection = connection;
             Client = new DBusClient(connection, logger);
@@ -75,6 +83,7 @@ internal sealed class NetworkManagerConnection(IPluginLogger logger) : IDisposab
         {
             logger.Info($"Network: cannot use the system bus ({ex.Message}), NetworkManager stays unavailable.");
             Disconnect();
+            connection.Dispose();
             return false;
         }
     }
@@ -163,31 +172,30 @@ internal sealed class NetworkManagerConnection(IPluginLogger logger) : IDisposab
 
     private async Task MonitorConnectionAsync(DBusConnection connection)
     {
-        int attempt = 0;
-
-        while (!_shutdown.IsCancellationRequested)
+        Exception? error;
+        try
         {
-            Exception? error;
-            try
-            {
-                error = await connection.DisconnectedAsync().ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                error = ex;
-            }
+            error = await connection.DisconnectedAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            error = ex;
+        }
 
-            if (_shutdown.IsCancellationRequested)
-            {
-                return;
-            }
+        if (_shutdown.IsCancellationRequested)
+        {
+            return;
+        }
 
-            logger.Warn($"Network: the system bus connection was lost ({error?.Message ?? "unknown reason"}), reconnecting.");
-            IsConnected = false;
-            RaiseConnectionLost();
+        logger.Warn($"Network: the system bus connection was lost ({error?.Message ?? "unknown reason"}), reconnecting.");
+        IsConnected = false;
+        RaiseConnectionLost();
 
+        // Only the reconnect is retried; the lost connection is not waited on again. A successful
+        // reconnect starts a monitor of its own, so this one ends there.
+        for (int attempt = 0; !_shutdown.IsCancellationRequested; attempt++)
+        {
             TimeSpan delay = ReconnectDelays[Math.Min(attempt, ReconnectDelays.Length - 1)];
-            attempt++;
 
             try
             {
@@ -198,7 +206,6 @@ internal sealed class NetworkManagerConnection(IPluginLogger logger) : IDisposab
                 return;
             }
 
-            // A successful reconnect starts its own monitor, so this loop hands over and ends.
             if (await ReconnectAsync().ConfigureAwait(false))
             {
                 return;
