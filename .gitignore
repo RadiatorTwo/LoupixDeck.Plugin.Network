@@ -1,0 +1,9 @@
+bin/
+obj/
+*.user
+.vs/
+.idea/
+CLAUDE.md
+release.ps1
+release.sh
+dist/

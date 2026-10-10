@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>default</LangVersion>
+    <DebugType>embedded</DebugType>
+
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Plugin icon, read from the assembly so it does not depend on the install layout. -->
+    <EmbeddedResource Include="icon.png" LogicalName="LoupixDeck.Plugin.Network.icon.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Restored from nuget.org. The host ships the SDK assembly at runtime,
+         so the runtime asset must never be copied next to the plugin. -->
+    <PackageReference Include="LoupixDeck.PluginSdk" Version="1.31.1">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+
+    <!-- The plugin talks to NetworkManager over D-Bus. Same library and version as the other
+         Linux plugins in this workspace. -->
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.95.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The host reads these straight off disk next to plugin.json, so they have to be copied
+         like any other content file. -->
+    <Content Include="strings.*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

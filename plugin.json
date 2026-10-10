@@ -1,0 +1,12 @@
+{
+  "id": "network",
+  "name": "Network",
+  "version": "1.0.0",
+  "sdkVersion": "1.31",
+  "entryAssembly": "LoupixDeck.Plugin.Network.dll",
+  "platform": "Linux",
+  "author": "RadiatorTwo",
+  "description": "Controls NetworkManager connections, Wi-Fi and VPNs over the native D-Bus API.",
+  "projectUrl": "https://github.com/RadiatorTwo/LoupixDeck.Plugin.Network",
+  "iconFile": ""
+}
